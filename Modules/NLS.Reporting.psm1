@@ -1,232 +1,420 @@
-#
-# NLS.Reporting.psm1
-# NextLayerSec Assessment Framework -- Reporting Module
-# Generates markdown assessment summary and exceptions list
-#
-# Author:  NextLayerSec
-# Version: 1.0.0
-# License: CC BY-ND 4.0 -- https://creativecommons.org/licenses/by-nd/4.0/
-#
+#Requires -Version 5.1
+#Requires -Modules ExchangeOnlineManagement
 
-function Publish-NLSAssessmentSummary {
-    <#
-    .SYNOPSIS
-        Generates the assessment summary markdown report.
-    .DESCRIPTION
-        Produces a structured markdown document containing:
-        - Assessment metadata
-        - Executive summary with finding counts by severity
-        - Coverage map
-        - Findings organized by control family and severity
-        - Exceptions encountered during collection
-    #>
-    param(
-        [Parameter(Mandatory = $true)]
-        [hashtable]$ScoredResults,
+<#
+.SYNOPSIS
+    NextLayerSec Control-Plane Assessor
+    Read-only M365 security assessment instrument.
 
-        [Parameter(Mandatory = $true)]
-        [hashtable]$Metadata,
+.DESCRIPTION
+    Invoke-NLSAssessment is a strictly read-only assessment tool.
+    It connects to Exchange Online and Microsoft Graph, collects
+    security policy configuration and sign-in telemetry, scores
+    findings against the NextLayerSec baseline, and produces a
+    structured markdown assessment report.
 
-        [Parameter(Mandatory = $true)]
-        [hashtable]$Coverage,
+    No tenant configuration changes are made at any point.
 
-        [Parameter(Mandatory = $true)]
-        [string]$OutputPath,
+    Execution modes:
+      -Quick        Skips sign-in log telemetry collection. Faster run.
+      -Full         Full collection including CA telemetry (default).
+      -NoTelemetry  Alias for -Quick. Explicit operator intent.
+      -RedactSensitiveData  Scrubs UPNs, GUIDs, and IPs from output artifacts.
 
-        [bool]$Redact = $false
-    )
+.PARAMETER UserPrincipalName
+    Admin UPN used to authenticate to Exchange Online and Microsoft Graph.
 
-    $findings = $ScoredResults.Findings
-    $summary  = $ScoredResults.Summary
-    $sb       = [System.Text.StringBuilder]::new()
+.PARAMETER SkipConnect
+    Skip connection step if already connected to Exchange Online and Graph.
 
-    # ── Header ───────────────────────────────────────────────
-    [void]$sb.AppendLine('# NextLayerSec M365 Security Assessment')
-    [void]$sb.AppendLine('')
-    [void]$sb.AppendLine('> Read-only assessment. No tenant configuration changes were made.')
-    [void]$sb.AppendLine('> Missing telemetry is NOT equivalent to missing policy.')
-    [void]$sb.AppendLine('')
-    [void]$sb.AppendLine('---')
-    [void]$sb.AppendLine('')
+.PARAMETER Quick
+    Run inventory-only mode. Skips sign-in log telemetry.
 
-    # ── Metadata ─────────────────────────────────────────────
-    [void]$sb.AppendLine('## Assessment Metadata')
-    [void]$sb.AppendLine('')
-    [void]$sb.AppendLine("| Field | Value |")
-    [void]$sb.AppendLine("|---|---|")
-    [void]$sb.AppendLine("| Execution Time (UTC) | $($Metadata.ExecutionTimeUTC) |")
-    [void]$sb.AppendLine("| Operator | $($Metadata.AuthContext) |")
-    [void]$sb.AppendLine("| EXO Module Version | $($Metadata.ModuleVersions.ExchangeOnlineManagement) |")
-    [void]$sb.AppendLine("| Graph Module Version | $($Metadata.ModuleVersions.MicrosoftGraphAuthentication) |")
-    [void]$sb.AppendLine('')
-    [void]$sb.AppendLine('---')
-    [void]$sb.AppendLine('')
+.PARAMETER NoTelemetry
+    Explicitly skip telemetry collection. Same as -Quick.
 
-    # ── Executive Summary ────────────────────────────────────
-    [void]$sb.AppendLine('## Executive Summary')
-    [void]$sb.AppendLine('')
-    [void]$sb.AppendLine('| Severity | Count |')
-    [void]$sb.AppendLine('|---|:---:|')
-    [void]$sb.AppendLine("| Critical | $($summary.Critical) |")
-    [void]$sb.AppendLine("| High | $($summary.High) |")
-    [void]$sb.AppendLine("| Medium | $($summary.Medium) |")
-    [void]$sb.AppendLine("| Low | $($summary.Low) |")
-    [void]$sb.AppendLine("| Pass | $($summary.Pass) |")
-    [void]$sb.AppendLine("| **Total Checks** | **$($summary.Total)** |")
-    [void]$sb.AppendLine('')
+.PARAMETER NoGraph
+    Skip Microsoft Graph entirely. Runs Exchange Online checks only.
+    No Graph modules required. No browser consent prompt.
+    Best for quick tenant assessments or environments where Graph access
+    is not available. Conditional Access checks will be marked NotCollected.
 
-    if ($summary.Critical -gt 0) {
-        [void]$sb.AppendLine("> **$($summary.Critical) critical finding(s) require immediate remediation.**")
-        [void]$sb.AppendLine('')
+.PARAMETER NIST
+    Include NIST SP 800-53 Rev 5 citations in assessment output.
+    Scoring engine defaults to NIST when no framework flag is passed.
+
+.PARAMETER CIS
+    Include CIS Controls v8.1 citations in assessment output.
+
+.PARAMETER HIPAA
+    Include HIPAA Security Rule current enforceable rule citations (45 CFR 164.312).
+
+.PARAMETER HIPAAProposed
+    Include HIPAA NPRM December 2024 proposed rule citations.
+    Use alongside -HIPAA to produce a dual-state gap analysis showing
+    current compliance posture and exposure against the incoming mandatory standard.
+    Expected final rule: May 2026.
+
+.PARAMETER RedactSensitiveData
+    Scrub UPNs, GUIDs, and IP addresses from all output files.
+    Use when sharing artifacts externally or with clients.
+
+.EXAMPLE
+    .\Invoke-NLSAssessment.ps1 -UserPrincipalName admin@contoso.com
+
+.EXAMPLE
+    .\Invoke-NLSAssessment.ps1 -UserPrincipalName admin@contoso.com -NoGraph
+
+.EXAMPLE
+    .\Invoke-NLSAssessment.ps1 -UserPrincipalName admin@contoso.com -Quick -RedactSensitiveData
+
+.EXAMPLE
+    .\Invoke-NLSAssessment.ps1 -UserPrincipalName admin@contoso.com -NoGraph -RedactSensitiveData
+
+.EXAMPLE
+    .\Invoke-NLSAssessment.ps1 -SkipConnect -NoTelemetry
+
+.NOTES
+    Author:   NextLayerSec
+    Version:  1.2.0 -- Framework switches wired: -NIST, -CIS, -HIPAA, -HIPAAProposed
+    Requires: ExchangeOnlineManagement (always)
+              Microsoft.Graph.Authentication (Full/Quick mode only)
+              Microsoft.Graph.Identity.SignIns (Full mode only)
+    License:  CC BY-ND 4.0 -- https://creativecommons.org/licenses/by-nd/4.0/
+
+    Graph scopes required (when not using -NoGraph):
+      Policy.Read.ConditionalAccess
+      AuditLog.Read.All (Full mode only)
+      Directory.Read.All
+#>
+
+[CmdletBinding(DefaultParameterSetName = 'Full')]
+param (
+    [Parameter(Mandatory = $false)]
+    [string]$UserPrincipalName,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$SkipConnect,
+
+    [Parameter(ParameterSetName = 'Quick')]
+    [switch]$Quick,
+
+    [Parameter(ParameterSetName = 'Full')]
+    [switch]$Full,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$NoTelemetry,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$NoGraph,
+
+    # ── Framework routing flags ───────────────────────────────
+    # Pass one or more to include framework citations in output.
+    # Scoring engine defaults to NIST when no framework flag is passed.
+    [Parameter(Mandatory = $false)]
+    [switch]$NIST,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$CIS,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$HIPAA,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$HIPAAProposed,
+    # ─────────────────────────────────────────────────────────
+
+    [Parameter(Mandatory = $false)]
+    [switch]$RedactSensitiveData
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Continue'
+
+# ─────────────────────────────────────────────
+# Hard Runtime Safeguard Banner
+# ─────────────────────────────────────────────
+
+Write-Host ''
+Write-Host '================================================================' -ForegroundColor DarkRed
+Write-Host ' READ-ONLY ASSESSMENT INSTRUMENT' -ForegroundColor Red
+Write-Host ' - No tenant configuration changes will be made.' -ForegroundColor Gray
+Write-Host ' - Results depend on RBAC, licensing, and API visibility.' -ForegroundColor Gray
+Write-Host ' - Missing telemetry is NOT equivalent to missing policy.' -ForegroundColor Gray
+Write-Host ' - Do not run against production tenants without authorization.' -ForegroundColor Gray
+Write-Host '================================================================' -ForegroundColor DarkRed
+Write-Host ''
+
+# ─────────────────────────────────────────────
+# Operator Mode Resolution
+# ─────────────────────────────────────────────
+
+$runTelemetry = -not ($Quick -or $NoTelemetry -or $NoGraph)
+$runGraph     = -not $NoGraph
+$runRedaction = [bool]$RedactSensitiveData
+
+Write-Host '[*] Execution Mode: ' -NoNewline -ForegroundColor Cyan
+if ($NoGraph) {
+    Write-Host 'EXCHANGE ONLY (No Graph) ' -NoNewline -ForegroundColor Yellow
+} elseif ($Quick -or $NoTelemetry) {
+    Write-Host 'QUICK (No Telemetry) ' -NoNewline -ForegroundColor Yellow
+} else {
+    Write-Host 'FULL ' -NoNewline -ForegroundColor Green
+}
+if ($runRedaction) { Write-Host '| REDACTED OUTPUT ' -NoNewline -ForegroundColor Magenta }
+Write-Host ''
+
+Write-Host '[*] Frameworks: ' -NoNewline -ForegroundColor Cyan
+$activeFrameworks = @()
+if (-not ($NIST -or $CIS -or $HIPAA -or $HIPAAProposed)) {
+    $activeFrameworks += 'NIST (default)'
+} else {
+    if ($NIST)          { $activeFrameworks += 'NIST' }
+    if ($CIS)           { $activeFrameworks += 'CIS' }
+    if ($HIPAA)         { $activeFrameworks += 'HIPAA Current' }
+    if ($HIPAAProposed) { $activeFrameworks += 'HIPAA Proposed' }
+}
+Write-Host ($activeFrameworks -join ', ') -ForegroundColor White
+Write-Host ''
+
+# ─────────────────────────────────────────────
+# Prerequisite Validation
+# ─────────────────────────────────────────────
+
+Write-Host '[-] Validating prerequisites...' -ForegroundColor DarkGray
+
+$requiredModules = @('ExchangeOnlineManagement')
+if ($runGraph) {
+    $requiredModules += 'Microsoft.Graph.Authentication'
+    if ($runTelemetry) {
+        $requiredModules += 'Microsoft.Graph.Identity.SignIns'
     }
-
-    [void]$sb.AppendLine('---')
-    [void]$sb.AppendLine('')
-
-    # ── Coverage Map ─────────────────────────────────────────
-    [void]$sb.AppendLine('## Collection Coverage')
-    [void]$sb.AppendLine('')
-    [void]$sb.AppendLine('| Control Family | Status | Notes |')
-    [void]$sb.AppendLine('|---|:---:|---|')
-
-    foreach ($key in $Coverage.Keys) {
-        $entry = $Coverage[$key]
-        $statusIcon = switch ($entry.Status) {
-            'Collected'    { 'Collected' }
-            'Partial'      { 'Partial' }
-            'NotCollected' { 'Not Collected' }
-            'Unsupported'  { 'Unsupported' }
-            default        { $entry.Status }
-        }
-        $reason = if ($entry.Reason) { $entry.Reason } else { '' }
-        [void]$sb.AppendLine("| $key | $statusIcon | $reason |")
-    }
-
-    [void]$sb.AppendLine('')
-    [void]$sb.AppendLine('---')
-    [void]$sb.AppendLine('')
-
-    # ── Findings by Severity ─────────────────────────────────
-    [void]$sb.AppendLine('## Findings')
-    [void]$sb.AppendLine('')
-
-    $severityOrder = @('Critical', 'High', 'Medium', 'Low', 'Pass')
-
-    foreach ($sev in $severityOrder) {
-        $sevFindings = $findings | Where-Object { $_.Severity -eq $sev }
-        if (-not $sevFindings) { continue }
-
-        [void]$sb.AppendLine("### $sev")
-        [void]$sb.AppendLine('')
-
-        # Group by Category property
-        $categories = $sevFindings | Group-Object -Property Category
-        foreach ($category in $categories) {
-            [void]$sb.AppendLine("#### $($category.Name)")
-            [void]$sb.AppendLine('')
-
-            foreach ($finding in $category.Group) {
-                # Use Title property from state-aware scoring engine
-                [void]$sb.AppendLine("**$($finding.Title)**")
-                [void]$sb.AppendLine('')
-                [void]$sb.AppendLine($finding.Detail)
-
-                # Inject framework citations if present
-                $frameworks = @()
-                if ($finding.NIST_SP800_53_r5) { $frameworks += "**NIST:** $($finding.NIST_SP800_53_r5)" }
-                if ($finding.CIS_v8_1)         { $frameworks += "**CIS:** $($finding.CIS_v8_1)" }
-                if ($finding.HIPAA_Current)    { $frameworks += "**HIPAA (Current):** $($finding.HIPAA_Current)" }
-                if ($finding.HIPAA_Proposed)   { $frameworks += "**HIPAA (Proposed):** $($finding.HIPAA_Proposed)" }
-
-                if ($frameworks.Count -gt 0) {
-                    [void]$sb.AppendLine('')
-                    [void]$sb.AppendLine('> *Frameworks: ' + ($frameworks -join ' | ') + '*')
-                }
-
-                if ($finding.Remediation -and $sev -ne 'Pass') {
-                    [void]$sb.AppendLine('')
-                    [void]$sb.AppendLine("*Remediation:* $($finding.Remediation)")
-                }
-                [void]$sb.AppendLine('')
-            }
-        }
-    }
-
-    [void]$sb.AppendLine('---')
-    [void]$sb.AppendLine('')
-
-    # ── Footer ───────────────────────────────────────────────
-    [void]$sb.AppendLine('*Assessment performed by NextLayerSec -- nextlayersec.io*')
-    [void]$sb.AppendLine('*Read-only instrument. Results reflect visible telemetry at time of assessment.*')
-
-    # Write output
-    Export-NLSSafeMarkdown -Content $sb.ToString() -OutPath $OutputPath -Redact $Redact
-
-    Write-Host "  [+] Assessment summary written to: $OutputPath" -ForegroundColor Green
 }
 
-function Publish-NLSExceptionsList {
-    <#
-    .SYNOPSIS
-        Generates the exceptions markdown report.
-    .DESCRIPTION
-        Documents all non-fatal exceptions encountered during collection.
-        Helps analysts distinguish between controls that passed, controls
-        that failed, and controls that could not be assessed due to
-        permissions, licensing, or API errors.
-    #>
-    param(
-        [Parameter(Mandatory = $true)]
-        [array]$Exceptions,
+$missingModules = foreach ($mod in $requiredModules) {
+    if (-not (Get-Module -ListAvailable -Name $mod)) { $mod }
+}
 
-        [Parameter(Mandatory = $true)]
-        [string]$OutputPath,
+if ($missingModules) {
+    Write-Host "[!] Missing required modules: $($missingModules -join ', ')" -ForegroundColor Red
+    Write-Host ''
+    Write-Host '    Install missing modules with:' -ForegroundColor Gray
+    foreach ($mod in $missingModules) {
+        Write-Host "    Install-Module -Name $mod -Scope CurrentUser -Force" -ForegroundColor Gray
+    }
+    Write-Host ''
+    exit 1
+}
 
-        [bool]$Redact = $false
-    )
+Write-Host '  [+] All required modules present' -ForegroundColor Green
 
-    $sb = [System.Text.StringBuilder]::new()
+# ─────────────────────────────────────────────
+# Module Loading
+# ─────────────────────────────────────────────
 
-    [void]$sb.AppendLine('# NextLayerSec Assessment -- Collection Exceptions')
-    [void]$sb.AppendLine('')
-    [void]$sb.AppendLine('> Exceptions are non-fatal errors encountered during data collection.')
-    [void]$sb.AppendLine('> An exception does not mean a control failed -- it means the control could not be assessed.')
-    [void]$sb.AppendLine('> Review each exception to determine whether a permissions or licensing gap exists.')
-    [void]$sb.AppendLine('')
-    [void]$sb.AppendLine('---')
-    [void]$sb.AppendLine('')
+$scriptDir  = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+$modulesDir = Join-Path $scriptDir 'Modules'
 
-    if ($Exceptions.Count -eq 0) {
-        [void]$sb.AppendLine('No exceptions encountered during collection.')
+if (-not (Test-Path $modulesDir)) {
+    Write-Host "[!] Modules directory not found at: $modulesDir" -ForegroundColor Red
+    exit 1
+}
+
+$moduleFiles = Get-ChildItem -Path $modulesDir -Filter '*.psm1' -ErrorAction Stop
+if ($moduleFiles.Count -eq 0) {
+    Write-Host "[!] No .psm1 files found in Modules directory" -ForegroundColor Red
+    exit 1
+}
+
+foreach ($mod in $moduleFiles) {
+    try {
+        Import-Module $mod.FullName -Force -ErrorAction Stop
+        Write-Host "  [+] Loaded: $($mod.Name)" -ForegroundColor DarkGray
+    } catch {
+        Write-Host "  [!] Failed to load module $($mod.Name): $_" -ForegroundColor Red
+        exit 1
+    }
+}
+
+# ─────────────────────────────────────────────
+# Output Directory Setup
+# ─────────────────────────────────────────────
+
+$timestamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
+$outDir    = Join-Path $scriptDir "output\$timestamp"
+
+try {
+    New-Item -Path $outDir -ItemType Directory -Force | Out-Null
+    Write-Host "  [+] Output directory: $outDir" -ForegroundColor DarkGray
+} catch {
+    Write-Host "[!] Failed to create output directory: $_" -ForegroundColor Red
+    exit 1
+}
+
+# ─────────────────────────────────────────────
+# Connection Bootstrap
+# ─────────────────────────────────────────────
+
+if (-not $SkipConnect) {
+    $upn = if ($UserPrincipalName) { $UserPrincipalName } else { Read-Host 'Enter Admin UPN' }
+
+    Write-Host ''
+    Write-Host '[-] Establishing read-only connections...' -ForegroundColor DarkGray
+
+    try {
+        Connect-ExchangeOnline -UserPrincipalName $upn -ShowBanner:$false -ErrorAction Stop
+        Write-Host '  [+] Exchange Online connected' -ForegroundColor Green
+    } catch {
+        Write-Host "  [!] Exchange Online connection failed: $_" -ForegroundColor Red
+        exit 1
+    }
+
+    if ($runGraph) {
+        # Minimal scoped Graph permissions
+        $graphScopes = @(
+            'Policy.Read.ConditionalAccess',
+            'Directory.Read.All'
+        )
+        if ($runTelemetry) {
+            $graphScopes += 'AuditLog.Read.All'
+        }
+
+        try {
+            Connect-MgGraph -Scopes $graphScopes -NoWelcome -ErrorAction Stop
+            Write-Host '  [+] Microsoft Graph connected' -ForegroundColor Green
+        } catch {
+            Write-Host "  [!] Microsoft Graph connection failed: $_" -ForegroundColor Red
+            Write-Host '      Conditional Access checks will be unavailable.' -ForegroundColor Yellow
+            # Non-fatal -- continue without Graph
+        }
     } else {
-        [void]$sb.AppendLine("**Total exceptions: $($Exceptions.Count)**")
-        [void]$sb.AppendLine('')
-
-        foreach ($ex in $Exceptions) {
-            [void]$sb.AppendLine("### $($ex.Source)")
-            [void]$sb.AppendLine('')
-            [void]$sb.AppendLine("**Time (UTC):** $($ex.Timestamp)")
-            [void]$sb.AppendLine('')
-            [void]$sb.AppendLine("**Message:** $($ex.Message)")
-            [void]$sb.AppendLine('')
-            if ($ex.ErrorDetails) {
-                [void]$sb.AppendLine('**Error Details:**')
-                [void]$sb.AppendLine('')
-                [void]$sb.AppendLine('```')
-                [void]$sb.AppendLine($ex.ErrorDetails)
-                [void]$sb.AppendLine('```')
-                [void]$sb.AppendLine('')
-            }
-        }
+        Write-Host '  [!] Graph skipped (-NoGraph). Exchange Online only.' -ForegroundColor Yellow
     }
-
-    [void]$sb.AppendLine('---')
-    [void]$sb.AppendLine('')
-    [void]$sb.AppendLine('*NextLayerSec -- nextlayersec.io*')
-
-    Export-NLSSafeMarkdown -Content $sb.ToString() -OutPath $OutputPath -Redact $Redact
-
-    Write-Host "  [+] Exceptions list written to: $OutputPath" -ForegroundColor Green
 }
 
-Export-ModuleMember -Function Publish-NLSAssessmentSummary, Publish-NLSExceptionsList
+Write-Host ''
+
+# ─────────────────────────────────────────────
+# Data Collection
+# ─────────────────────────────────────────────
+
+Write-Host '[-] Collecting Exchange Online policies...' -ForegroundColor DarkGray
+$exchangeResults = Get-NLSExchangePolicies -Redact $runRedaction
+
+$caResults = @{}
+$caTelemetryResults = @{}
+
+if ($runGraph) {
+    Write-Host '[-] Collecting Conditional Access policies...' -ForegroundColor DarkGray
+    $caResults = Get-NLSConditionalAccessPolicies -Redact $runRedaction
+
+    if ($runTelemetry) {
+        Write-Host '[-] Collecting Conditional Access telemetry (sign-in logs)...' -ForegroundColor DarkGray
+        $caTelemetryResults = Get-NLSConditionalAccessTelemetry -Redact $runRedaction
+    } else {
+        Register-NLSCoverage -ControlFamily 'ConditionalAccessTelemetry' `
+            -Status 'NotCollected' `
+            -Reason 'Operator specified -Quick or -NoTelemetry'
+        Write-Host '  [!] Telemetry collection skipped (Quick/NoTelemetry mode)' -ForegroundColor Yellow
+    }
+} else {
+    Register-NLSCoverage -ControlFamily 'ConditionalAccess' `
+        -Status 'NotCollected' `
+        -Reason 'Operator specified -NoGraph. Run without -NoGraph to include CA policy checks.'
+    Register-NLSCoverage -ControlFamily 'ConditionalAccessTelemetry' `
+        -Status 'NotCollected' `
+        -Reason 'Operator specified -NoGraph.'
+    Write-Host '  [!] Conditional Access checks skipped (-NoGraph mode)' -ForegroundColor Yellow
+}
+
+Write-Host '[-] Collecting metadata...' -ForegroundColor DarkGray
+$metadata = Get-NLSMetadata -Redact $runRedaction
+
+Write-Host ''
+
+# ─────────────────────────────────────────────
+# Scoring
+# ─────────────────────────────────────────────
+
+Write-Host '[-] Applying scoring model...' -ForegroundColor DarkGray
+
+$allResults = @{
+    ExchangePolicies            = $exchangeResults
+    ConditionalAccess           = $caResults
+    ConditionalAccessTelemetry  = $caTelemetryResults
+}
+
+$scoringParams = @{
+    Results = $allResults
+    Redact  = $runRedaction
+}
+
+# Pass framework switches if specified by operator
+# Scoring engine defaults -NIST to $true -- only override when explicitly passed
+if ($PSBoundParameters.ContainsKey('NIST'))          { $scoringParams.NIST          = $NIST.IsPresent }
+if ($PSBoundParameters.ContainsKey('CIS'))           { $scoringParams.CIS           = $CIS.IsPresent }
+if ($PSBoundParameters.ContainsKey('HIPAA'))         { $scoringParams.HIPAA         = $HIPAA.IsPresent }
+if ($PSBoundParameters.ContainsKey('HIPAAProposed')) { $scoringParams.HIPAAProposed = $HIPAAProposed.IsPresent }
+
+$scoredResults = Invoke-NLSScoringModel @scoringParams
+
+Write-Host ''
+
+# ─────────────────────────────────────────────
+# Reporting
+# ─────────────────────────────────────────────
+
+Write-Host '[-] Generating assessment artifacts...' -ForegroundColor DarkGray
+
+$summaryPath    = Join-Path $outDir 'AssessmentSummary.md'
+$exceptionsPath = Join-Path $outDir 'Exceptions.md'
+
+Publish-NLSAssessmentSummary `
+    -ScoredResults $scoredResults `
+    -Metadata $metadata `
+    -Coverage (Get-NLSCoverageMap) `
+    -OutputPath $summaryPath `
+    -Redact $runRedaction
+
+$exceptions = Get-NLSExceptions
+if ($null -eq $exceptions) { $exceptions = @() }
+Publish-NLSExceptionsList `
+    -Exceptions $exceptions `
+    -OutputPath $exceptionsPath `
+    -Redact $runRedaction
+
+# ─────────────────────────────────────────────
+# Summary Output
+# ─────────────────────────────────────────────
+
+$s = $scoredResults.Summary
+
+Write-Host ''
+Write-Host '================================================================' -ForegroundColor DarkGray
+Write-Host '  Assessment Complete' -ForegroundColor White
+Write-Host '================================================================' -ForegroundColor DarkGray
+Write-Host "  Satisfied  $($s.Satisfied)" -ForegroundColor Green
+Write-Host "  Partial    $($s.Partial)"   -ForegroundColor $(if ($s.Partial -gt 0)   { 'Yellow' } else { 'Green' })
+Write-Host "  Gap        $($s.Gap)"       -ForegroundColor $(if ($s.Gap -gt 0)       { 'Red' }    else { 'Green' })
+Write-Host "  Total      $($s.Total)"     -ForegroundColor White
+Write-Host ''
+Write-Host "  Artifacts: $outDir" -ForegroundColor Cyan
+Write-Host ''
+
+# ─────────────────────────────────────────────
+# Disconnect
+# ─────────────────────────────────────────────
+
+if (-not $SkipConnect) {
+    try {
+        Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue
+        if ($runGraph) {
+            Disconnect-MgGraph -ErrorAction SilentlyContinue
+        }
+        Write-Host '[-] Sessions disconnected.' -ForegroundColor DarkGray
+    } catch {
+        # Sessions may have already closed
+    }
+}
+
+Write-Host ''
