@@ -6,9 +6,10 @@
 > Designed for MSP and consulting engagements against M365 Business Premium tenants.
 
 [![License](https://img.shields.io/badge/License-CC%20BY--ND%204.0-blue?style=flat-square)](https://creativecommons.org/licenses/by-nd/4.0/)
-[![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?style=flat-square)](https://github.com/PowerShell/PowerShell)
+[![PowerShell](https://img.shields.io/badge/PowerShell-7%2B-blue?style=flat-square)](https://github.com/PowerShell/PowerShell)
 [![Read Only](https://img.shields.io/badge/Mode-Read--Only-00c853?style=flat-square)]()
 [![Frameworks](https://img.shields.io/badge/Frameworks-NIST%20%7C%20CIS%20%7C%20HIPAA-orange?style=flat-square)]()
+[![Version](https://img.shields.io/badge/Version-1.0.0-white?style=flat-square)]()
 
 ---
 
@@ -112,15 +113,27 @@ Update procedure when framework versions change:
 
 ## Requirements
 
+### Recommended PowerShell Version
+
+PowerShell 7+ is strongly recommended. Windows PowerShell 5.1 may experience Graph SDK module assembly conflicts that cause collection failures.
+
+Install PowerShell 7:
+```powershell
+winget install Microsoft.PowerShell
+```
+
+Always run the script from a PowerShell 7 session.
+
 ### Modules
 
 ```powershell
 # Required for all modes
 Install-Module -Name ExchangeOnlineManagement -Scope CurrentUser -Force
-Install-Module -Name Microsoft.Graph.Authentication -Scope CurrentUser -Force
+Install-Module -Name Microsoft.Graph -Scope CurrentUser -Force
 
-# Required for Full mode (CA telemetry)
-Install-Module -Name Microsoft.Graph.Identity.SignIns -Scope CurrentUser -Force
+# The full Graph SDK installs all required submodules including:
+# Microsoft.Graph.Authentication
+# Microsoft.Graph.Identity.SignIns
 ```
 
 ### Permissions
@@ -137,6 +150,25 @@ Install-Module -Name Microsoft.Graph.Identity.SignIns -Scope CurrentUser -Force
 ```powershell
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
+
+Verify:
+```powershell
+Get-ExecutionPolicy -Scope CurrentUser
+# Should return: RemoteSigned
+```
+
+---
+
+## First Run Setup
+
+Files downloaded from GitHub are marked untrusted by Windows and will be blocked from running even with the correct execution policy set. Run these commands once after downloading:
+
+```powershell
+Unblock-File -Path .\Invoke-NLSAssessment.ps1
+Unblock-File -Path .\Modules\*.psm1
+```
+
+You only need to do this once after the initial download. If you pull updates from GitHub and new module files are added, run the Unblock-File commands again.
 
 ---
 
@@ -156,7 +188,7 @@ Runs all Exchange Online checks. No Graph modules required. No browser consent p
 .\Invoke-NLSAssessment.ps1 -UserPrincipalName admin@contoso.com
 ```
 
-Runs all checks including Conditional Access policies and sign-in log telemetry. Requires `AuditLog.Read.All`.
+Runs all checks including Conditional Access policies and sign-in log telemetry. Browser will open for Microsoft Graph consent on first run against each tenant.
 
 ### NIST Assessment
 
@@ -164,7 +196,7 @@ Runs all checks including Conditional Access policies and sign-in log telemetry.
 .\Invoke-NLSAssessment.ps1 -UserPrincipalName admin@contoso.com -NoGraph -NIST
 ```
 
-Default framework. NIST SP 800-53 Rev 5 citations included in all findings.
+NIST SP 800-53 Rev 5 citations included in all findings. Default framework when no flag is passed.
 
 ### HIPAA Engagement — Dual State Gap Analysis
 
@@ -172,7 +204,7 @@ Default framework. NIST SP 800-53 Rev 5 citations included in all findings.
 .\Invoke-NLSAssessment.ps1 -UserPrincipalName admin@contoso.com -NoGraph -HIPAA -HIPAAProposed -RedactSensitiveData
 ```
 
-Produces findings mapped to both the current enforceable HIPAA Security Rule and the incoming NPRM proposed rule. Shows where the client stands today and what becomes mandatory under the final rule. Recommended for all healthcare client engagements.
+Produces findings mapped to both the current enforceable HIPAA Security Rule and the incoming NPRM proposed rule. Recommended for all healthcare client engagements.
 
 ### Full Framework Stack
 
@@ -181,6 +213,14 @@ Produces findings mapped to both the current enforceable HIPAA Security Rule and
 ```
 
 All four frameworks included in every finding.
+
+### Quick Mode
+
+```powershell
+.\Invoke-NLSAssessment.ps1 -UserPrincipalName admin@contoso.com -Quick
+```
+
+Skips sign-in log telemetry. Faster run. No `AuditLog.Read.All` required.
 
 ### Redacted Output
 
@@ -212,17 +252,17 @@ All artifacts written to `output\<timestamp>\` relative to the script directory.
 ### Sample Finding Output
 
 ```markdown
-### Gap
+### High
 
-#### Identity
+#### Transport
 
-**Block legacy authentication protocols**
+**Disable SMTP client authentication tenant-wide**
 
-Policy [DefaultPolicy]: Basic auth still enabled on: AllowBasicAuthImap
+SMTP client authentication is enabled. Legacy relay and credential exposure risk.
 
-> *Frameworks: **NIST:** IA-2(6), CM-7 | **HIPAA (Current):** §164.312(a)(2)(i), §164.312(d) | **HIPAA (Proposed):** §164.312(a)(2)(i), §164.312(d), §164.312(a)(2)(ix)*
+> *Frameworks: **NIST:** CM-7, SC-8, IA-3 | **CIS:** 4.8, 9.2 | **HIPAA (Current):** §164.312(e)(1), §164.312(e)(2)(ii) | **HIPAA (Proposed):** §164.312(e)(1), §164.312(e)(2)(ii)*
 
-*Remediation:* Set all AllowBasicAuth* parameters to $false via Set-AuthenticationPolicy
+*Remediation:* Run Set-TransportConfig -SmtpClientAuthenticationDisabled $true
 ```
 
 ---
@@ -247,8 +287,9 @@ The assessment summary includes a coverage map distinguishing between:
 - Always run from a dedicated admin account — not your primary user account
 - Use `-RedactSensitiveData` for any artifacts leaving your workstation
 - The `output\` directory is gitignored — do not commit assessment artifacts
-- Run `-NoGraph -Quick` for initial triage. Run full mode for formal engagement documentation.
+- Run `-NoGraph -Quick` for initial triage. Run full mode for formal engagement documentation
 - First run against a new tenant will prompt for Graph consent in a browser window
+- Run from PowerShell 7 to avoid Graph SDK module version conflicts
 
 ---
 
@@ -260,6 +301,177 @@ The assessment summary includes a coverage map distinguishing between:
 | CIS Controls | v8.1 June 2024 | 2026-04-23 |
 | HIPAA Security Rule | 45 CFR 164.312 current enforceable | 2026-04-23 |
 | HIPAA NPRM | December 27 2024 proposed rule | 2026-04-23 |
+
+---
+
+## Troubleshooting
+
+### Script blocked on first run
+
+```powershell
+Unblock-File -Path .\Invoke-NLSAssessment.ps1
+Unblock-File -Path .\Modules\*.psm1
+```
+
+### Execution policy error
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+Get-ExecutionPolicy -Scope CurrentUser
+# Should return: RemoteSigned
+```
+
+### Graph module assembly conflict
+
+Symptom: `Could not load file or assembly 'Microsoft.Graph.Authentication'`
+
+Cause: Multiple versions of Graph modules installed. PowerShell loaded an older cached version.
+
+Fix:
+```powershell
+Install-Module Microsoft.Graph -Scope CurrentUser -Force -AllowClobber
+```
+
+Close PowerShell completely and reopen in a fresh PowerShell 7 session before running again.
+
+### Conditional Access returns Partial
+
+Symptom: `ConditionalAccess | Partial | One or more errors occurred`
+
+Check the cmdlet is available:
+```powershell
+Get-Command Get-MgIdentityConditionalAccessPolicy -ErrorAction SilentlyContinue
+```
+
+If it returns nothing or an old version:
+```powershell
+Install-Module -Name Microsoft.Graph -Scope CurrentUser -Force -AllowClobber
+```
+
+Close PowerShell and reopen in a fresh session.
+
+### Device compliance blocking Graph consent
+
+Symptom: Browser opens with `AADSTS53000: Device is not in required device state`
+
+Cause: Conditional Access policy requires a compliant device. The machine running the script is not Intune enrolled.
+
+Options:
+- Run from a compliant enrolled device
+- Use `-NoGraph` flag to skip Graph entirely and run Exchange checks only
+- Exclude the admin account from the device compliance CA policy in Entra ID
+
+### Operator shows as Unknown in report
+
+Cause: Graph was not connected when metadata was collected. Use Graph mode or the operator field will not populate from the Graph context.
+
+### Module version conflict on Windows PowerShell 5.1
+
+Switch to PowerShell 7. The Graph SDK officially recommends PowerShell 7 for best compatibility.
+
+```powershell
+winget install Microsoft.PowerShell
+```
+
+Install all modules fresh in the PowerShell 7 session after installing.
+
+---
+
+## Version 2 Roadmap
+
+The following features are planned for v2.0.0 and are not yet implemented.
+
+### Zero Trust Assessment Flag
+
+Add `-ZeroTrust` flag that maps findings to the CISA Zero Trust Maturity Model pillars and maturity levels.
+
+New checks added in ZT mode:
+- Break-glass account detection and sign-in monitoring validation
+- Privileged Identity Management — permanent vs JIT eligible admin role assignments
+- Named locations defined — is network trust explicitly defined or implicit
+- Device compliance CA policy — is compliant device required as a grant control
+- CA report-only policy count — how many policies are monitoring but not enforcing
+- Session controls — sign-in frequency and persistent browser session configuration
+- Mailbox audit retention — is 180-day retention enforced across all mailboxes
+
+ZT maturity levels per finding:
+- **Traditional** — control absent, no Zero Trust posture
+- **Initial** — control partially implemented
+- **Advanced** — control enforced with monitoring
+- **Optimal** — control enforced, automated, and continuously validated
+
+Report format:
+```
+> *Frameworks: **NIST:** AC-3 | **ZT Pillar:** Identity | **ZT Maturity:** Initial → Advanced*
+```
+
+### Auto-Open Report
+
+Add `-OpenReport` flag to automatically open `AssessmentSummary.md` on completion. Default handler will be VS Code if installed, otherwise system default for `.md` files.
+
+```powershell
+.\Invoke-NLSAssessment.ps1 -UserPrincipalName admin@contoso.com -NIST -OpenReport
+```
+
+### Granular Finding Detail
+
+Currently findings report counts only:
+```
+5 mailbox(es) have auditing disabled.
+```
+
+v2 will include the specific affected objects inline:
+```
+5 mailbox(es) have auditing disabled:
+  - user1@contoso.com
+  - user2@contoso.com
+  - user3@contoso.com
+  - user4@contoso.com
+  - user5@contoso.com
+```
+
+Applies to all controls that return counts:
+- Mailbox auditing disabled
+- POP3 enabled mailboxes
+- IMAP enabled mailboxes
+- Mailboxes with active forwarding
+- DKIM disabled domains
+- DNSSEC disabled domains
+
+### Current State vs Recommended View
+
+Every finding will include a structured comparison table:
+
+```
+Control:        SMTP Client Authentication
+Current State:  Enabled
+Recommended:    Disabled
+Standard:       CIS M365 Benchmark 1.1.1
+Risk:           Legacy relay vector, credential exposure, MFA bypass
+Action:         Set-TransportConfig -SmtpClientAuthenticationDisabled $true
+```
+
+This turns the report into a remediation workplan where every row is an actionable ticket.
+
+### Additional Framework Support
+
+- `-ZeroTrust` — CISA Zero Trust Maturity Model (Identity and Devices pillars)
+- `-CISBenchmark` — CIS Microsoft 365 Foundations Benchmark (M365-specific controls)
+- `-SOC2` — SOC 2 Type II control mapping (CC6 Logical Access, CC7 System Operations)
+- `-CMMC` — CMMC Level 2 mapping for defense contractors handling CUI
+- `-FTCSafeguards` — FTC Safeguards Rule for financial institutions and covered businesses
+
+### Conditional Access Deep Dive
+
+Currently CA collection returns policy state and MFA enforcement status. v2 will add:
+- Named location inventory and review
+- Excluded user and group enumeration
+- Break-glass account detection and validation
+- PIM role assignment status per admin role
+
+### Scheduled Assessment Mode
+
+Run assessments on a defined cadence and compare results against previous runs. Delta reporting to surface new gaps or regressions since the last assessment.
 
 ---
 
