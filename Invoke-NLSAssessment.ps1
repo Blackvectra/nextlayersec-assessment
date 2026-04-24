@@ -376,8 +376,10 @@ Publish-NLSAssessmentSummary `
     -OutputPath $summaryPath `
     -Redact $runRedaction
 
+$exceptions = Get-NLSExceptions
+if ($null -eq $exceptions) { $exceptions = @() }
 Publish-NLSExceptionsList `
-    -Exceptions (Get-NLSExceptions) `
+    -Exceptions $exceptions `
     -OutputPath $exceptionsPath `
     -Redact $runRedaction
 
@@ -391,11 +393,10 @@ Write-Host ''
 Write-Host '================================================================' -ForegroundColor DarkGray
 Write-Host '  Assessment Complete' -ForegroundColor White
 Write-Host '================================================================' -ForegroundColor DarkGray
-Write-Host "  Critical  $($s.Critical)" -ForegroundColor $(if ($s.Critical -gt 0) { 'Red' } else { 'Green' })
-Write-Host "  High      $($s.High)"     -ForegroundColor $(if ($s.High -gt 0)     { 'Red' } else { 'Green' })
-Write-Host "  Medium    $($s.Medium)"   -ForegroundColor $(if ($s.Medium -gt 0)   { 'Yellow' } else { 'Green' })
-Write-Host "  Low       $($s.Low)"      -ForegroundColor $(if ($s.Low -gt 0)      { 'Yellow' } else { 'Green' })
-Write-Host "  Pass      $($s.Pass)"     -ForegroundColor Green
+Write-Host "  Satisfied  $($s.Satisfied)" -ForegroundColor Green
+Write-Host "  Partial    $($s.Partial)"   -ForegroundColor $(if ($s.Partial -gt 0)   { 'Yellow' } else { 'Green' })
+Write-Host "  Gap        $($s.Gap)"       -ForegroundColor $(if ($s.Gap -gt 0)       { 'Red' }    else { 'Green' })
+Write-Host "  Total      $($s.Total)"     -ForegroundColor White
 Write-Host ''
 Write-Host "  Artifacts: $outDir" -ForegroundColor Cyan
 Write-Host ''
