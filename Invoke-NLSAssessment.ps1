@@ -125,7 +125,12 @@ param (
     # ─────────────────────────────────────────────────────────
 
     [Parameter(Mandatory = $false)]
-    [switch]$RedactSensitiveData
+    [switch]$RedactSensitiveData,
+
+    # ── v2 flags (stubbed) ────────────────────────────────────
+    [Parameter(Mandatory = $false)]
+    [switch]$OpenReport    # v2 -- auto-open AssessmentSummary.md on completion
+    # ─────────────────────────────────────────────────────────
 )
 
 Set-StrictMode -Version Latest
@@ -400,6 +405,15 @@ Write-Host "  Total      $($s.Total)"     -ForegroundColor White
 Write-Host ''
 Write-Host "  Artifacts: $outDir" -ForegroundColor Cyan
 Write-Host ''
+
+# Auto-open report if -OpenReport flag passed
+if ($OpenReport) {
+    $reportFile = Join-Path $outDir 'AssessmentSummary.md'
+    if (Test-Path $reportFile) {
+        Write-Host '[-] Opening assessment report...' -ForegroundColor DarkGray
+        Start-Process $reportFile
+    }
+}
 
 # ─────────────────────────────────────────────
 # Disconnect
